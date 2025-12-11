@@ -1,0 +1,7 @@
+apiVersion: v2
+name: test-chart
+description: Chart de test pour coverage POC
+type: application
+version: 0.1.0
+appVersion: "1.0"
+
