@@ -1,0 +1,9 @@
+{{- if .Values.inlineIf }}
+# TEST: Inline if/end (no else)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-inline-if
+data:
+  value: {{ if .Values.inlineIf.custom }}{{ .Values.inlineIf.custom | quote }}{{ end }}
+{{- end }}

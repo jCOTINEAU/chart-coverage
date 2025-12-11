@@ -1,0 +1,10 @@
+{{- if .Values.dictContext }}
+# TEST: Helper called with dict containing "context" key
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-dict-context
+data:
+  {{- include "helper.withContext" (dict "component" .Values.dictContext.component "context" $) | nindent 2 }}
+{{- end }}
+

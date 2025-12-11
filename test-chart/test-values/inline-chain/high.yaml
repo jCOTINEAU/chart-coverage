@@ -1,0 +1,4 @@
+# Test inline-chain: HIGH (first if)
+inlineChain:
+  level: "high"
+

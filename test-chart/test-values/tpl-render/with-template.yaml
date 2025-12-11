@@ -1,0 +1,6 @@
+# Test tpl: value contains template syntax
+tplTest:
+  template: "{{ .name }}"
+  scope:
+    name: "dynamic-value"
+

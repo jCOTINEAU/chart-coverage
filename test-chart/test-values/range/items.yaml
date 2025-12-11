@@ -1,0 +1,10 @@
+# Test range: with items
+rangeTest:
+  items:
+    - name: item1
+      enabled: true
+    - name: item2
+      enabled: false
+    - name: item3
+      enabled: true
+

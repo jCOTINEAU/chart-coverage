@@ -1,0 +1,4 @@
+# Test dict-context: primary component (if branch)
+dictContext:
+  component: "primary"
+

@@ -1,0 +1,5 @@
+# Test helpers: enabled=true, custom set
+helperTest:
+  enabled: true
+  custom: "my-custom-value"
+

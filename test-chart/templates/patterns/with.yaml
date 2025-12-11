@@ -1,0 +1,12 @@
+# TEST: with block
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-with
+data:
+  base: "always"
+{{- with .Values.withBlock }}
+{{- if .value }}
+  fromWith: {{ .value | quote }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,4 @@
+# Test inline-if-else: IF branch
+inlineIfElse:
+  custom: "custom-value"
+

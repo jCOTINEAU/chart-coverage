@@ -1,0 +1,9 @@
+# Test mixed context: enabled=false, component=secondary
+mixedContext:
+  component: "secondary"
+
+# Required by helper.ifElse and helper.inline
+helperTest:
+  enabled: false
+  custom: ""
+

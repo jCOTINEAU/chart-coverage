@@ -1,0 +1,10 @@
+{{- if .Values.valueHelper }}
+# TEST: Helper called with simple value (not root context)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-value-helper
+data:
+  size: {{ include "helper.formatValue" .Values.valueHelper.amount }}
+{{- end }}
+

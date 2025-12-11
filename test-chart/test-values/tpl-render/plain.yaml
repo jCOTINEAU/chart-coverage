@@ -1,0 +1,5 @@
+# Test tpl: value is plain string (no template syntax)
+tplTest:
+  template: "plain-value"
+  scope: {}
+

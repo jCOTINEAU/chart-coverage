@@ -1,0 +1,10 @@
+{{- if .Values.tplTest }}
+# TEST: tpl with embedded template syntax in strings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-tpl-render
+data:
+  rendered: {{ include "helper.tplRender" . | quote }}
+{{- end }}
+

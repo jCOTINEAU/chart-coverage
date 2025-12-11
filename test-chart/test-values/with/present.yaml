@@ -1,0 +1,4 @@
+# Test with: block present
+withBlock:
+  value: "from-with-block"
+

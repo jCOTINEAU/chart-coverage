@@ -1,0 +1,4 @@
+# Test helper with value context: large value
+valueHelper:
+  amount: 150
+

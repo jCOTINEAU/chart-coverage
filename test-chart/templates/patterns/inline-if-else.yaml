@@ -1,0 +1,9 @@
+{{- if .Values.inlineIfElse }}
+# TEST: Inline if/else/end
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-inline-if-else
+data:
+  value: {{ if .Values.inlineIfElse.custom }}{{ .Values.inlineIfElse.custom | quote }}{{ else }}"default"{{ end }}
+{{- end }}

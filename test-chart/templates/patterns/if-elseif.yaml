@@ -1,0 +1,18 @@
+{{- if .Values.ifElseIf }}
+# TEST: if/else if/else/end chain
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-if-elseif
+data:
+{{- if eq .Values.ifElseIf.tier "gold" }}
+  tier: "gold"
+  priority: "high"
+{{- else if eq .Values.ifElseIf.tier "silver" }}
+  tier: "silver"
+  priority: "medium"
+{{- else }}
+  tier: "bronze"
+  priority: "low"
+{{- end }}
+{{- end }}

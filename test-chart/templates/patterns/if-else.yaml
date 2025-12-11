@@ -1,0 +1,13 @@
+{{- if .Values.ifElse }}
+# TEST: if/else/end
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-if-else
+data:
+{{- if .Values.ifElse.useOptionA }}
+  choice: "option-a"
+{{- else }}
+  choice: "option-b"
+{{- end }}
+{{- end }}

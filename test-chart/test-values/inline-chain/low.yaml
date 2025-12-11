@@ -1,0 +1,4 @@
+# Test inline-chain: LOW (else)
+inlineChain:
+  level: "low"
+

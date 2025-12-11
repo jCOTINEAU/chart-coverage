@@ -1,0 +1,15 @@
+{{- if .Values.helperTest }}
+# TEST: Helper functions
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-helpers
+data:
+  # Static helper
+  {{- include "helper.static" . | nindent 2 }}
+  # Helper with if/else (using root context)
+  {{- include "helper.ifElse" . | nindent 2 }}
+  # Helper with inline if/else (using root context)
+  {{- include "helper.inline" . | nindent 2 }}
+{{- end }}
+

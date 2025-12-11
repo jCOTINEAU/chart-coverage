@@ -1,0 +1,18 @@
+{{- if .Values.mixedContext }}
+# TEST: Mixed helper calls - both direct $ and dict with context
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-mixed-context
+  labels:
+    # Direct context call
+    {{- include "helper.static" . | nindent 4 }}
+data:
+  # Direct context call with condition
+  {{- include "helper.ifElse" . | nindent 2 }}
+  # Dict with context call
+  {{- include "helper.withContext" (dict "component" .Values.mixedContext.component "context" $) | nindent 2 }}
+  # Another direct context call
+  {{- include "helper.inline" . | nindent 2 }}
+{{- end }}
+

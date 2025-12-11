@@ -1,0 +1,6 @@
+# Test nested: level1 + level2
+nestedIf:
+  level1: true
+  level2: true
+  level3: false
+

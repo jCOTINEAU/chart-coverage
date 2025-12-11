@@ -1,20 +1,34 @@
-replicaCount: 3
+# Base values - defaults for all test patterns
+# Each test-values/*.yaml overrides specific sections
 
-image:
-  repository: nginx
-  tag: "1.21"
-
-ingress:
+ifSimple:
   enabled: false
-  host: example.com
 
-service:
-  enabled: true
-  type: ClusterIP
-  port: 80
+ifElse:
+  useOptionA: false
 
-resources:
-  enabled: false
-  limits:
-    cpu: 100m
-    memory: 128Mi
+ifElseIf:
+  tier: "bronze"
+
+inlineIf:
+  custom: ""
+
+inlineIfElse:
+  custom: ""
+
+inlineChain:
+  level: "low"
+
+nestedIf:
+  level1: false
+  level2: false
+  level3: false
+
+withBlock: {}
+
+rangeTest:
+  items: []
+
+multiInline:
+  a: false
+  b: false

@@ -1,0 +1,12 @@
+{{- if .Values.ifSimple }}
+# TEST: Simple if/end (no else)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-if-simple
+data:
+  base: "always"
+{{- if .Values.ifSimple.enabled }}
+  conditional: "only when enabled"
+{{- end }}
+{{- end }}

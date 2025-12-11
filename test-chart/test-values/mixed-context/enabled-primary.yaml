@@ -1,0 +1,9 @@
+# Test mixed context: enabled=true, component=primary
+mixedContext:
+  component: "primary"
+
+# Required by helper.ifElse and helper.inline
+helperTest:
+  enabled: true
+  custom: "custom-value"
+

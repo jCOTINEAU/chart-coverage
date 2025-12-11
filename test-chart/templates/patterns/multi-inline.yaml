@@ -1,0 +1,9 @@
+{{- if .Values.multiInline }}
+# TEST: Multiple inline conditions on same line
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-multiple-inline
+data:
+  combined: "{{ if .Values.multiInline.a }}A{{ else }}notA{{ end }}-{{ if .Values.multiInline.b }}B{{ else }}notB{{ end }}"
+{{- end }}

@@ -1,0 +1,9 @@
+{{- if .Values.inlineChain }}
+# TEST: Inline if/else if/else chain
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-inline-chain
+data:
+  level: {{ if eq .Values.inlineChain.level "high" }}"HIGH"{{ else if eq .Values.inlineChain.level "medium" }}"MEDIUM"{{ else }}"LOW"{{ end }}
+{{- end }}

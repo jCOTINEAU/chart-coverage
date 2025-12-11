@@ -1,0 +1,14 @@
+{{- if .Values.rangeTest }}
+# TEST: range with inner condition
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-range
+data:
+  placeholder: "value"
+{{- range .Values.rangeTest.items }}
+{{- if .enabled }}
+  {{ .name }}: "enabled"
+{{- end }}
+{{- end }}
+{{- end }}

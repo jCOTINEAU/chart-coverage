@@ -1,0 +1,4 @@
+# Test dict-context: secondary component (else branch)
+dictContext:
+  component: "secondary"
+

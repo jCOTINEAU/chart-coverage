@@ -1,0 +1,4 @@
+# Test inline-chain: MEDIUM (else if)
+inlineChain:
+  level: "medium"
+

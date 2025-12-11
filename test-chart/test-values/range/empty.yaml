@@ -1,0 +1,4 @@
+# Test range: empty list (no branch covered)
+rangeTest:
+  items: []
+

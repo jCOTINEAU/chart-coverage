@@ -1,0 +1,4 @@
+# Test if-else: ELSE branch
+ifElse:
+  useOptionA: false
+

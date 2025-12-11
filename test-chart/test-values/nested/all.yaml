@@ -1,0 +1,6 @@
+# Test nested: ALL levels enabled
+nestedIf:
+  level1: true
+  level2: true
+  level3: true
+

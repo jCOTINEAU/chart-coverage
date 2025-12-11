@@ -1,0 +1,5 @@
+# Test multiple-inline: both true
+multiInline:
+  a: true
+  b: true
+
