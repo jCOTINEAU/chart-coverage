@@ -51,6 +51,7 @@ Requirements: `bash`, `awk`, `helm`
 | Option | Description |
 |--------|-------------|
 | `-s, --select <path>` | Only instrument specific template(s). Can be used multiple times |
+| `--helm-args <args>` | Extra arguments passed to `helm template` (e.g., `"--set key=val"`) |
 | `--instrument-only` | Stop after instrumentation (for debugging) |
 | `--json` | Output results in JSON format |
 | `-h, --help` | Show help |
@@ -72,7 +73,10 @@ Requirements: `bash`, `awk`, `helm`
 
 # Filter to specific templates
 ./helm-coverage.sh -s templates/deployment.yaml ./my-chart values.yaml
-./helm-coverage.sh -s workers/ ./my-chart values.yaml
+
+# Pass extra arguments to helm template
+./helm-coverage.sh --helm-args "--set version=2025.10" ./my-chart values.yaml
+./helm-coverage.sh --helm-args "--set-string env=prod --set replicas=3" ./my-chart values.yaml
 
 # JSON output for CI/CD
 ./helm-coverage.sh --json ./my-chart ./test-values/ > coverage.json

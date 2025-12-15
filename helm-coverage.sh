@@ -26,23 +26,22 @@ usage() {
 Usage: ${SCRIPT_NAME} [options] <chart-path> [values-file-or-dir...]
 
 Options:
-    -s, --select <path>  Only instrument and measure specific template(s)
-                         Can be used multiple times. Paths are relative to templates/
-    --instrument-only    Stop after instrumentation (no cleanup)
-    --json               Output results in JSON format (to stdout)
-    -h, --help           Show this help message
+    -s, --select <path>      Only instrument specific template(s). Can be repeated.
+    --helm-args <args>       Extra arguments to pass to helm template (e.g. "--set key=val")
+    --instrument-only        Stop after instrumentation (no cleanup)
+    --json                   Output results in JSON format (to stdout)
+    -h, --help               Show this help message
 
 Arguments:
     chart-path          Path to the Helm chart directory
-    values-file-or-dir  Values files (.yaml) or directories containing them
+    values-file-or-dir  Values files (.yaml/.yml) or directories containing them
 
 Examples:
     ${SCRIPT_NAME} ./my-chart
     ${SCRIPT_NAME} ./my-chart values.yaml
-    ${SCRIPT_NAME} ./my-chart ./values-dir/        # Uses all .yaml in dir
+    ${SCRIPT_NAME} ./my-chart ./values-dir/
     ${SCRIPT_NAME} -s patterns/nested.yaml ./my-chart values.yaml
-    ${SCRIPT_NAME} -s workers/ ./my-chart values.yaml  # All in workers/
-    ${SCRIPT_NAME} --instrument-only ./my-chart
+    ${SCRIPT_NAME} --helm-args "--set version=2025.10" ./my-chart values.yaml
     ${SCRIPT_NAME} --json ./my-chart ./values/ > coverage.json
 EOF
     exit 1
@@ -64,8 +63,8 @@ validate_chart_path() {
     
     if [[ ! -d "$chart_path" ]]; then
         log_error "Chart directory not found: $chart_path"
-        exit 1
-    fi
+    exit 1
+fi
 
     if [[ ! -d "$chart_path/templates" ]]; then
         log_error "No templates/ directory in: $chart_path"
@@ -181,12 +180,15 @@ instrument_yaml_template() {
         print "{{- include \"coverage.init\" . -}}"
     }
     {
+        # Reset inline occurrence counter for each line
+        inline_occ = 0
+        
         # Check if standalone end/else (on its own line)
         if ($0 ~ /^[[:space:]]*\{\{-?[[:space:]]*(end|else)[[:space:]]*-?\}\}[[:space:]]*$/ ||
             $0 ~ /^[[:space:]]*\{\{-?[[:space:]]*else[[:space:]]+if[[:space:]]+/) {
-            # Standalone - inject before line
+            # Standalone - inject before line (use line number)
             marker_count++
-            marker_id = fname ":" marker_count
+            marker_id = fname ":L" NR
             print "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
             print $0
         } else if ($0 ~ /\{\{-?[[:space:]]*(end|else)/) {
@@ -202,9 +204,16 @@ instrument_yaml_template() {
                     # Inside tpl/cat string - do not inject, just copy as-is
                     result = result substr(line, 1, RSTART + RLENGTH - 1)
                 } else {
-                    # Normal template code - inject marker
+                    # Normal template code - inject marker with line number
                     marker_count++
-                    marker = "{{- include \"coverage.trackFile\" (list $ \"" fname ":" marker_count "\") -}}"
+                    inline_occ++
+                    # Use L<line>.<occurrence> for inline multiples
+                    if (inline_occ == 1) {
+                        marker_id = fname ":L" NR
+                    } else {
+                        marker_id = fname ":L" NR "." inline_occ
+                    }
+                    marker = "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
                     result = result substr(line, 1, RSTART-1) marker substr(line, RSTART, RLENGTH)
                 }
                 pos_offset = pos_offset + RSTART + RLENGTH - 1
@@ -269,12 +278,15 @@ instrument_tpl_template() {
         return (quote_count % 2 == 1)
     }
     
-    BEGIN {
+    BEGIN { 
         marker_count = 0
         in_define = 0
         current_define = ""
     }
     {
+        # Reset inline occurrence counter for each line
+        inline_occ = 0
+        
         # Track define blocks to get helper names
         if ($0 ~ /\{\{-?[[:space:]]*define[[:space:]]+"([^"]+)"/) {
             in_define = 1
@@ -293,14 +305,14 @@ instrument_tpl_template() {
                 # Check if this is likely the define-closing end (simple heuristic: no else)
                 if ($0 ~ /else/) {
                     marker_count++
-                    marker_id = fname ":" current_define ":" marker_count
+                    marker_id = fname ":" current_define ":L" NR
                     print "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
                     print $0
                 } else {
                     # Could be define-closing or block-closing end
                     # We inject anyway, but it wont break if its the define end
                     marker_count++
-                    marker_id = fname ":" current_define ":" marker_count
+                    marker_id = fname ":" current_define ":L" NR
                     print "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
                     print $0
                     # Check if this closes the define
@@ -312,7 +324,7 @@ instrument_tpl_template() {
                 }
             } else if ($0 ~ /^[[:space:]]*\{\{-?[[:space:]]*else[[:space:]]+if[[:space:]]+/) {
                 marker_count++
-                marker_id = fname ":" current_define ":" marker_count
+                marker_id = fname ":" current_define ":L" NR
                 print "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
                 print $0
             } else if ($0 ~ /\{\{-?[[:space:]]*(end|else)/) {
@@ -328,9 +340,15 @@ instrument_tpl_template() {
                         # Inside tpl/cat string - do not inject, just copy as-is
                         result = result substr(line, 1, RSTART + RLENGTH - 1)
                     } else {
-                        # Normal template code - inject marker
+                        # Normal template code - inject marker with line number
                         marker_count++
-                        marker = "{{- include \"coverage.trackHelper\" (list $ \"" fname ":" current_define ":" marker_count "\") -}}"
+                        inline_occ++
+                        if (inline_occ == 1) {
+                            marker_id = fname ":" current_define ":L" NR
+                        } else {
+                            marker_id = fname ":" current_define ":L" NR "." inline_occ
+                        }
+                        marker = "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
                         result = result substr(line, 1, RSTART-1) marker substr(line, RSTART, RLENGTH)
                     }
                     pos_offset = pos_offset + RSTART + RLENGTH - 1
@@ -425,7 +443,7 @@ instrument_chart() {
         total_file_markers=$((total_file_markers + markers))
         
         log_info "Instrumented file: ${relative_path} (${markers} branches)"
-    done < <(find "${instrumented_dir}/templates" -type f -name "*.yaml" -print0)
+    done < <(find "${instrumented_dir}/templates" -type f \( -name "*.yaml" -o -name "*.yml" \) -print0)
     
     # Find and instrument all .tpl files (except our coverage helper)
     while IFS= read -r -d '' template; do
@@ -450,6 +468,30 @@ instrument_chart() {
 }
 
 # -----------------------------------------------------------------------------
+# Extract all branch markers from instrumented templates
+# Writes to provided files: one for file branches, one for helper branches
+# -----------------------------------------------------------------------------
+extract_all_branches() {
+    local instrumented_dir="$1"
+    local all_file_branches_file="$2"
+    local all_helper_branches_file="$3"
+    
+    # Extract file branch markers from .yaml/.yml templates
+    # Use grep -roE to get each marker separately, then extract the branch ID
+    grep -roE 'coverage\.trackFile" \(list \$ "[^"]+"\)' \
+        "${instrumented_dir}/templates" \
+        --include="*.yaml" --include="*.yml" 2>/dev/null | \
+        sed 's/.*"\([^"]*\)".*/\1/' | sort -u >> "$all_file_branches_file" || true
+    
+    # Extract helper branch markers from .tpl files (excluding our coverage helper)
+    grep -roE 'coverage\.trackHelper" \(list \$ "[^"]+"\)' \
+        "${instrumented_dir}/templates" \
+        --include="*.tpl" 2>/dev/null | \
+        grep -v "$HELPER_FILENAME" | \
+        sed 's/.*"\([^"]*\)".*/\1/' | sort -u >> "$all_helper_branches_file" || true
+}
+
+# -----------------------------------------------------------------------------
 # Run helm template and parse coverage
 # Outputs covered branches to provided accumulator files
 # -----------------------------------------------------------------------------
@@ -459,11 +501,18 @@ run_coverage() {
     local all_files_accumulator="$3"
     local all_helpers_accumulator="$4"
     local values_file="$5"
+    local helm_extra_args="${6:-}"
     
     local helm_args=("template" "coverage-test" "$instrumented_dir")
     
     # Add values file if provided
     [[ -n "$values_file" ]] && helm_args+=("-f" "$values_file")
+    
+    # Add extra helm args if provided (split by spaces)
+    if [[ -n "$helm_extra_args" ]]; then
+        # shellcheck disable=SC2206
+        helm_args+=($helm_extra_args)
+    fi
     
     local output
     output=$(mktemp)
@@ -494,7 +543,7 @@ run_coverage() {
     local covered_files=()
     local covered_helpers=()
     
-    while IFS= read -r line; do
+while IFS= read -r line; do
         [[ -n "$line" ]] && covered_files+=("$line")
         echo "$line" >> "$all_files_accumulator"
     done < <(sort -u "$temp_files")
@@ -511,10 +560,10 @@ run_coverage() {
     local total_covered=$((file_count + helper_count))
     
     # Display results
-    echo ""
+echo ""
     echo "========================================"
     echo "Coverage Report"
-    echo "========================================"
+echo "========================================"
     
     if [[ ${#covered_files[@]} -gt 0 ]]; then
         echo ""
@@ -570,11 +619,15 @@ print_cumulative_summary() {
     local all_files_accumulator="$1"
     local all_helpers_accumulator="$2"
     local total_branches="$3"
+    local all_file_branches_file="${4:-}"
+    local all_helper_branches_file="${5:-}"
     
-    # Get unique covered branches
+    # Get unique covered branches (disable pipefail temporarily)
     local unique_files unique_helpers
-    unique_files=$(sort -u "$all_files_accumulator" 2>/dev/null | wc -l | tr -d ' ')
-    unique_helpers=$(sort -u "$all_helpers_accumulator" 2>/dev/null | wc -l | tr -d ' ')
+    unique_files=$(set +o pipefail; sort -u "$all_files_accumulator" 2>/dev/null | grep -v '^$' | wc -l | tr -d ' ')
+    unique_helpers=$(set +o pipefail; sort -u "$all_helpers_accumulator" 2>/dev/null | grep -v '^$' | wc -l | tr -d ' ')
+    [[ -z "$unique_files" || "$unique_files" == "0" ]] && unique_files=0
+    [[ -z "$unique_helpers" || "$unique_helpers" == "0" ]] && unique_helpers=0
     local total_covered=$((unique_files + unique_helpers))
     
     # Calculate percentage
@@ -610,7 +663,37 @@ print_cumulative_summary() {
     sort -u "$all_helpers_accumulator" 2>/dev/null | while read -r line; do
         [[ -n "$line" ]] && echo -e "  ${GREEN}✓${NC} $line"
     done
-    echo ""
+    
+    # Show uncovered branches if we have the all-branches files
+    if [[ -n "$all_file_branches_file" ]] && [[ -f "$all_file_branches_file" ]]; then
+        local uncovered_files
+        uncovered_files=$(set +o pipefail; comm -23 <(sort -u "$all_file_branches_file") <(sort -u "$all_files_accumulator") 2>/dev/null | wc -l | tr -d ' ')
+        [[ -z "$uncovered_files" ]] && uncovered_files=0
+        
+        if [[ "$uncovered_files" -gt 0 ]]; then
+            echo ""
+            echo "❌ Uncovered file branches:"
+            comm -23 <(sort -u "$all_file_branches_file") <(sort -u "$all_files_accumulator") 2>/dev/null | while read -r line; do
+                [[ -n "$line" ]] && echo -e "  ${RED}✗${NC} $line"
+            done
+        fi
+    fi
+    
+    if [[ -n "$all_helper_branches_file" ]] && [[ -f "$all_helper_branches_file" ]]; then
+        local uncovered_helpers
+        uncovered_helpers=$(set +o pipefail; comm -23 <(sort -u "$all_helper_branches_file") <(sort -u "$all_helpers_accumulator") 2>/dev/null | wc -l | tr -d ' ')
+        [[ -z "$uncovered_helpers" ]] && uncovered_helpers=0
+        
+        if [[ "$uncovered_helpers" -gt 0 ]]; then
+            echo ""
+            echo "❌ Uncovered helper branches:"
+            comm -23 <(sort -u "$all_helper_branches_file") <(sort -u "$all_helpers_accumulator") 2>/dev/null | while read -r line; do
+                [[ -n "$line" ]] && echo -e "  ${RED}✗${NC} $line"
+            done
+        fi
+    fi
+    
+echo ""
     echo "----------------------------------------"
     printf "📄 Files:   %d unique branches\n" "$unique_files"
     printf "🔧 Helpers: %d unique branches\n" "$unique_helpers"
@@ -678,6 +761,7 @@ main() {
     local chart_path=""
     local values_files=()
     local select_filters=()
+    local helm_extra_args=""
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -688,6 +772,14 @@ main() {
                     usage
                 fi
                 select_filters+=("$2")
+                shift 2
+                ;;
+            --helm-args)
+                if [[ -z "${2:-}" ]]; then
+                    log_error "Option $1 requires an argument"
+                    usage
+                fi
+                helm_extra_args="$2"
                 shift 2
                 ;;
             --instrument-only)
@@ -728,7 +820,7 @@ main() {
                 while IFS= read -r -d '' yaml_file; do
                     expanded_values+=("$yaml_file")
                     ((count++))
-                done < <(find "$item" -type f -name "*.yaml" -print0 | sort -z)
+                done < <(find "$item" -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | sort -z)
                 log_info "Expanded directory $item: $count yaml files (recursive)"
             elif [[ -f "$item" ]]; then
                 expanded_values+=("$item")
@@ -783,28 +875,34 @@ main() {
     all_files_accumulator=$(mktemp)
     all_helpers_accumulator=$(mktemp)
     
+    # Extract all branch markers for uncovered reporting
+    local all_file_branches all_helper_branches
+    all_file_branches=$(mktemp)
+    all_helper_branches=$(mktemp)
+    extract_all_branches "$instrumented_dir" "$all_file_branches" "$all_helper_branches"
+    
     # Run coverage for each values file or default
     if [[ ${#values_files[@]} -eq 0 ]]; then
         log_info "Running with default values..."
         if [[ "$json_output" == true ]]; then
-            run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "" > /dev/null
+            run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "" "$helm_extra_args" > /dev/null
         else
-            run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" ""
+            run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "" "$helm_extra_args"
         fi
     else
         for vf in "${values_files[@]}"; do
             log_info "Running with: $(basename "$vf")"
             if [[ "$json_output" == true ]]; then
-                run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "$vf" > /dev/null
+                run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "$vf" "$helm_extra_args" > /dev/null
             else
-                run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "$vf"
+                run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "$vf" "$helm_extra_args"
             fi
         done
-        
-        # Show cumulative summary if multiple values files (not in JSON mode)
-        if [[ ${#values_files[@]} -gt 1 ]] && [[ "$json_output" == false ]]; then
-            print_cumulative_summary "$all_files_accumulator" "$all_helpers_accumulator" "$total_branches"
-        fi
+    fi
+    
+    # Show summary with uncovered branches (not in JSON mode)
+    if [[ "$json_output" == false ]]; then
+        print_cumulative_summary "$all_files_accumulator" "$all_helpers_accumulator" "$total_branches" "$all_file_branches" "$all_helper_branches"
     fi
     
     # Generate JSON output if requested
@@ -815,6 +913,7 @@ main() {
     # Cleanup
     rm -rf "$instrumented_dir"
     rm -f "$all_files_accumulator" "$all_helpers_accumulator"
+    rm -f "$all_file_branches" "$all_helper_branches"
     
     echo "" >&2
     log_success "Done"
