@@ -517,6 +517,10 @@ run_coverage() {
     local output
     output=$(mktemp)
     
+    log_info "Starting helm template..."
+    local start_time
+    start_time=$(date +%s.%N)
+    
     if ! helm "${helm_args[@]}" > "$output" 2>&1; then
         log_error "Helm template failed:"
         cat "$output" >&2
@@ -524,18 +528,26 @@ run_coverage() {
         return 1
     fi
     
+    local end_time elapsed
+    end_time=$(date +%s.%N)
+    elapsed=$(echo "$end_time - $start_time" | bc)
+    log_info "Helm template completed in ${elapsed}s"
+    
     # Parse coverage from output - extract unique branches
     local temp_files temp_helpers
     temp_files=$(mktemp)
     temp_helpers=$(mktemp)
     
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^#[[:space:]]*COVERED_FILE:[[:space:]]*(.+)$ ]]; then
-            echo "${BASH_REMATCH[1]}" >> "$temp_files"
-        elif [[ "$line" =~ ^#[[:space:]]*COVERED_HELPER:[[:space:]]*(.+)$ ]]; then
-            echo "${BASH_REMATCH[1]}" >> "$temp_helpers"
-        fi
-    done < "$output"
+    log_info "Parsing coverage output..."
+    local parse_start parse_end
+    parse_start=$(date +%s.%N)
+    
+    # Use grep instead of bash regex for performance
+    grep -E '^#[[:space:]]*COVERED_FILE:' "$output" | sed 's/^#[[:space:]]*COVERED_FILE:[[:space:]]*//' >> "$temp_files" || true
+    grep -E '^#[[:space:]]*COVERED_HELPER:' "$output" | sed 's/^#[[:space:]]*COVERED_HELPER:[[:space:]]*//' >> "$temp_helpers" || true
+    
+    parse_end=$(date +%s.%N)
+    log_info "Parsing completed in $(echo "$parse_end - $parse_start" | bc)s"
     
     rm -f "$output"
     
