@@ -809,26 +809,27 @@ instrument_chart() {
 # Extract all branch markers from instrumented templates
 # Writes to provided files: one for file branches, one for helper branches
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Extract all branch markers from instrumented templates
+# Writes to provided files: one for file branches, one for helper branches
+# Uses find -exec grep for BusyBox/Alpine compatibility (no --include or xargs)
+# -----------------------------------------------------------------------------
 extract_all_branches() {
     local instrumented_dir="$1"
     local all_file_branches_file="$2"
     local all_helper_branches_file="$3"
     
     # Extract file branch markers from .yaml/.yml templates
-    # Use grep -roE to get each marker separately, then extract the branch ID
-    grep -roE 'coverage\.trackFile" \(list \$ "[^"]+"\)' \
-        "${instrumented_dir}/templates" \
-        --include="*.yaml" --include="*.yml" 2>/dev/null | \
+    # Use find -exec for maximum portability (works on BusyBox, BSD, GNU)
+    find "${instrumented_dir}/templates" -type f \( -name "*.yaml" -o -name "*.yml" \) \
+        -exec grep -oE 'coverage\.trackFile" \(list \$ "[^"]+"\)' {} + 2>/dev/null | \
         sed 's/.*"\([^"]*\)".*/\1/' | sort -u >> "$all_file_branches_file" || true
     
     # Extract helper branch markers from .tpl files (excluding our coverage helper)
-    grep -roE 'coverage\.trackHelper" \(list \$ "[^"]+"\)' \
-        "${instrumented_dir}/templates" \
-        --include="*.tpl" 2>/dev/null | \
-        grep -v "$HELPER_FILENAME" | \
+    find "${instrumented_dir}/templates" -type f -name "*.tpl" ! -name "$HELPER_FILENAME" \
+        -exec grep -oE 'coverage\.trackHelper" \(list \$ "[^"]+"\)' {} + 2>/dev/null | \
         sed 's/.*"\([^"]*\)".*/\1/' | sort -u >> "$all_helper_branches_file" || true
 }
-
 # -----------------------------------------------------------------------------
 # Run helm template and parse coverage
 # Outputs covered branches to provided accumulator files
@@ -880,9 +881,10 @@ run_coverage() {
     local parse_start parse_end
     parse_start=$(date +%s.%N)
     
-    # Use grep instead of bash regex for performance
-    grep -E '^#[[:space:]]*COVERED_FILE:' "$output" | sed 's/^#[[:space:]]*COVERED_FILE:[[:space:]]*//' >> "$temp_files" || true
-    grep -E '^#[[:space:]]*COVERED_HELPER:' "$output" | sed 's/^#[[:space:]]*COVERED_HELPER:[[:space:]]*//' >> "$temp_helpers" || true
+    # Use grep to find coverage markers - be flexible with whitespace/format
+    # The markers look like: # COVERED_FILE: <branch_id>
+    grep 'COVERED_FILE:' "$output" | sed 's/.*COVERED_FILE:[[:space:]]*//' >> "$temp_files" || true
+    grep 'COVERED_HELPER:' "$output" | sed 's/.*COVERED_HELPER:[[:space:]]*//' >> "$temp_helpers" || true
     
     parse_end=$(date +%s.%N)
     log_info "Parsing completed in $(echo "$parse_end - $parse_start" | bc)s"
@@ -893,12 +895,12 @@ run_coverage() {
     local covered_files=()
     local covered_helpers=()
     
-while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         [[ -n "$line" ]] && covered_files+=("$line")
         echo "$line" >> "$all_files_accumulator"
     done < <(sort -u "$temp_files")
     
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         [[ -n "$line" ]] && covered_helpers+=("$line")
         echo "$line" >> "$all_helpers_accumulator"
     done < <(sort -u "$temp_helpers")
@@ -1146,7 +1148,7 @@ generate_cobertura_report() {
     branches_data=$(mktemp)
     
     # Process all file branches
-    while IFS= read -r branch; do
+    while IFS= read -r branch || [[ -n "$branch" ]]; do
         [[ -z "$branch" ]] && continue
         # Parse branch format: filename:L<start>-L<end> or filename:L<start>-L<end>.<occurrence>
         local filename start_line hits
@@ -1162,7 +1164,7 @@ generate_cobertura_report() {
     done < <(cat "$all_file_branches_file" 2>/dev/null)
     
     # Process helper branches
-    while IFS= read -r branch; do
+    while IFS= read -r branch || [[ -n "$branch" ]]; do
         [[ -z "$branch" ]] && continue
         # Parse branch format: filename:helper_name:L<start>-L<end>
         local filename start_line hits
