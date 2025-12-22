@@ -761,7 +761,7 @@ instrument_chart() {
     fi
     
     # Find and instrument all .yaml files
-    while IFS= read -r -d '' template; do
+    while IFS= read -r -d '' template || [[ -n "$template" ]]; do
         local relative_path="${template#${instrumented_dir}/templates/}"
         local filename
         filename=$(basename "$template")
@@ -784,7 +784,7 @@ instrument_chart() {
     done < <(find "${instrumented_dir}/templates" -type f \( -name "*.yaml" -o -name "*.yml" \) -print0)
     
     # Find and instrument all .tpl files (except our coverage helper)
-    while IFS= read -r -d '' template; do
+    while IFS= read -r -d '' template || [[ -n "$template" ]]; do
         local relative_path="${template#${instrumented_dir}/templates/}"
         local filename
         filename=$(basename "$template")
@@ -1324,7 +1324,7 @@ main() {
             if [[ -d "$item" ]]; then
                 # It's a directory - find all .yaml files
                 local count=0
-                while IFS= read -r -d '' yaml_file; do
+                while IFS= read -r -d '' yaml_file || [[ -n "$yaml_file" ]]; do
                     expanded_values+=("$yaml_file")
                     ((count++))
                 done < <(find "$item" -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | sort -z)
