@@ -1326,7 +1326,7 @@ main() {
                 local count=0
                 while IFS= read -r -d '' yaml_file || [[ -n "$yaml_file" ]]; do
                     expanded_values+=("$yaml_file")
-                    ((count++))
+                    ((count++)) || true
                 done < <(find "$item" -type f \( -name "*.yaml" -o -name "*.yml" \) -print0 | sort -z)
                 log_info "Expanded directory $item: $count yaml files (recursive)"
             elif [[ -f "$item" ]]; then
