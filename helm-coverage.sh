@@ -30,6 +30,7 @@ Options:
     --helm-args <args>       Extra arguments to pass to helm template (e.g. "--set key=val")
     --instrument-only        Stop after instrumentation (no cleanup)
     --json                   Output results in JSON format (to stdout)
+    --cobertura <file>       Output Cobertura XML report (for GitLab integration)
     -h, --help               Show this help message
 
 Arguments:
@@ -43,6 +44,7 @@ Examples:
     ${SCRIPT_NAME} -s patterns/nested.yaml ./my-chart values.yaml
     ${SCRIPT_NAME} --helm-args "--set version=2025.10" ./my-chart values.yaml
     ${SCRIPT_NAME} --json ./my-chart ./values/ > coverage.json
+    ${SCRIPT_NAME} --cobertura coverage.xml ./my-chart ./values/
 EOF
     exit 1
 }
@@ -246,6 +248,194 @@ instrument_yaml_template() {
 }
 
 # -----------------------------------------------------------------------------
+# Instrument a single .yaml template file (Cobertura mode with line ranges)
+# Returns the number of injected markers via stdout
+# Uses a stack-based approach to track block start lines
+# -----------------------------------------------------------------------------
+instrument_yaml_template_cobertura() {
+    local template_file="$1"
+    local relative_name="$2"
+    
+    local temp_file count_file
+    temp_file=$(mktemp)
+    count_file=$(mktemp)
+    
+    awk -v fname="$relative_name" -v countfile="$count_file" '
+    # Function to check if position is inside a string literal passed to tpl/cat/printf
+    function is_in_tpl_string(str, pos,    quote_count, i, c, prev) {
+        if (str !~ /(tpl|cat|printf)[[:space:]]*\(/) {
+            return 0
+        }
+        quote_count = 0
+        for (i = 1; i < pos; i++) {
+            c = substr(str, i, 1)
+            if (i > 1) {
+                prev = substr(str, i-1, 1)
+            } else {
+                prev = ""
+            }
+            if (c == "\"" && prev != "\\") {
+                quote_count++
+            }
+        }
+        return (quote_count % 2 == 1)
+    }
+    
+    BEGIN {
+        marker_count = 0
+        stack_top = 0
+        # Initialize shared coverage context
+        print "{{- include \"coverage.init\" . -}}"
+    }
+    
+    {
+        lines[NR] = $0
+        line_count = NR
+    }
+    
+    END {
+        # Process all lines to find block structures
+        for (ln = 1; ln <= line_count; ln++) {
+            line = lines[ln]
+            inline_occ = 0
+            
+            # Process line character by character to find template tags
+            pos = 1
+            result = ""
+            
+            while (pos <= length(line)) {
+                # Look for opening {{
+                rest = substr(line, pos)
+                
+                if (match(rest, /^\{\{-?[[:space:]]*(if|with|range)[[:space:]]+/)) {
+                    # Found an opening block - push to stack
+                    stack_top++
+                    stack_line[stack_top] = ln
+                    stack_pos[stack_top] = pos
+                    result = result substr(rest, 1, RLENGTH)
+                    pos = pos + RLENGTH
+                }
+                else if (match(rest, /^\{\{-?[[:space:]]*else[[:space:]]+if[[:space:]]+/)) {
+                    # else if: close previous block, open new one
+                    if (stack_top > 0) {
+                        start_line = stack_line[stack_top]
+                        stack_top--
+                    } else {
+                        start_line = ln
+                    }
+                    
+                    # Check if inside tpl string
+                    abs_pos = pos
+                    if (!is_in_tpl_string(line, abs_pos)) {
+                        marker_count++
+                        inline_occ++
+                        if (inline_occ == 1) {
+                            marker_id = fname ":L" start_line "-L" ln
+                        } else {
+                            marker_id = fname ":L" start_line "-L" ln "." inline_occ
+                        }
+                        marker = "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
+                        result = result marker
+                    }
+                    
+                    # Push new block start
+                    stack_top++
+                    stack_line[stack_top] = ln
+                    stack_pos[stack_top] = pos
+                    
+                    result = result substr(rest, 1, RLENGTH)
+                    pos = pos + RLENGTH
+                }
+                else if (match(rest, /^\{\{-?[[:space:]]*else[[:space:]]*-?\}\}/)) {
+                    # Standalone else: close previous block, open new one
+                    if (stack_top > 0) {
+                        start_line = stack_line[stack_top]
+                        stack_top--
+                    } else {
+                        start_line = ln
+                    }
+                    
+                    abs_pos = pos
+                    if (!is_in_tpl_string(line, abs_pos)) {
+                        marker_count++
+                        inline_occ++
+                        if (inline_occ == 1) {
+                            marker_id = fname ":L" start_line "-L" ln
+                        } else {
+                            marker_id = fname ":L" start_line "-L" ln "." inline_occ
+                        }
+                        marker = "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
+                        result = result marker
+                    }
+                    
+                    # Push new block start for the else branch
+                    stack_top++
+                    stack_line[stack_top] = ln
+                    stack_pos[stack_top] = pos
+                    
+                    result = result substr(rest, 1, RLENGTH)
+                    pos = pos + RLENGTH
+                }
+                else if (match(rest, /^\{\{-?[[:space:]]*end[[:space:]]*-?\}\}/)) {
+                    # End block: close current block
+                    if (stack_top > 0) {
+                        start_line = stack_line[stack_top]
+                        stack_top--
+                    } else {
+                        start_line = ln
+                    }
+                    
+                    abs_pos = pos
+                    if (!is_in_tpl_string(line, abs_pos)) {
+                        marker_count++
+                        inline_occ++
+                        if (inline_occ == 1) {
+                            marker_id = fname ":L" start_line "-L" ln
+                        } else {
+                            marker_id = fname ":L" start_line "-L" ln "." inline_occ
+                        }
+                        marker = "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
+                        result = result marker
+                    }
+                    
+                    result = result substr(rest, 1, RLENGTH)
+                    pos = pos + RLENGTH
+                }
+                else {
+                    # No special pattern, copy one character
+                    result = result substr(rest, 1, 1)
+                    pos = pos + 1
+                }
+            }
+            
+            processed_lines[ln] = result
+        }
+        
+        # Output all processed lines
+        for (ln = 1; ln <= line_count; ln++) {
+            print processed_lines[ln]
+        }
+        
+        # Print coverage report
+        print ""
+        print "{{ include \"coverage.printReport\" (list $ " marker_count ") }}"
+        
+        # Write marker count to separate file
+        print marker_count > countfile
+    }
+    ' "$template_file" > "$temp_file"
+    
+    # Read marker count from file
+    local marker_count
+    marker_count=$(cat "$count_file")
+    
+    mv "$temp_file" "$template_file"
+    rm -f "$count_file"
+    
+    echo "$marker_count"
+}
+
+# -----------------------------------------------------------------------------
 # Instrument a single .tpl helper file
 # Returns the number of injected markers via stdout
 # -----------------------------------------------------------------------------
@@ -380,6 +570,144 @@ instrument_tpl_template() {
 }
 
 # -----------------------------------------------------------------------------
+# Instrument a single .tpl helper file (Cobertura mode with line ranges)
+# Returns the number of injected markers via stdout
+# Uses define line as start for all branches within that helper
+# -----------------------------------------------------------------------------
+instrument_tpl_template_cobertura() {
+    local template_file="$1"
+    local relative_name="$2"
+    
+    local temp_file count_file
+    temp_file=$(mktemp)
+    count_file=$(mktemp)
+    
+    awk -v fname="$relative_name" -v countfile="$count_file" '
+    # Function to check if position is inside a string literal passed to tpl/cat/printf
+    function is_in_tpl_string(str, pos,    quote_count, i, c, prev) {
+        if (str !~ /(tpl|cat|printf)[[:space:]]*\(/) {
+            return 0
+        }
+        quote_count = 0
+        for (i = 1; i < pos; i++) {
+            c = substr(str, i, 1)
+            if (i > 1) {
+                prev = substr(str, i-1, 1)
+            } else {
+                prev = ""
+            }
+            if (c == "\"" && prev != "\\") {
+                quote_count++
+            }
+        }
+        return (quote_count % 2 == 1)
+    }
+    
+    BEGIN { 
+        marker_count = 0
+        in_define = 0
+        current_define = ""
+        define_line = 0
+    }
+    {
+        # Reset inline occurrence counter for each line
+        inline_occ = 0
+        
+        # Track define blocks to get helper names and start line
+        if ($0 ~ /\{\{-?[[:space:]]*define[[:space:]]+"([^"]+)"/) {
+            in_define = 1
+            define_line = NR
+            # Extract define name
+            match($0, /define[[:space:]]+"([^"]+)"/)
+            temp = substr($0, RSTART, RLENGTH)
+            gsub(/define[[:space:]]+"/, "", temp)
+            gsub(/"/, "", temp)
+            current_define = temp
+        }
+        
+        # Only instrument inside define blocks
+        if (in_define) {
+            # Check if standalone end/else (on its own line)
+            if ($0 ~ /^[[:space:]]*\{\{-?[[:space:]]*(end|else)[[:space:]]*-?\}\}[[:space:]]*$/) {
+                # Check if this is likely the define-closing end (simple heuristic: no else)
+                if ($0 ~ /else/) {
+                    marker_count++
+                    marker_id = fname ":" current_define ":L" define_line "-L" NR
+                    print "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
+                    print $0
+                } else {
+                    # Could be define-closing or block-closing end
+                    # We inject anyway, but it wont break if its the define end
+                    marker_count++
+                    marker_id = fname ":" current_define ":L" define_line "-L" NR
+                    print "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
+                    print $0
+                    # Check if this closes the define
+                    if ($0 ~ /end[[:space:]]*-?\}\}[[:space:]]*$/) {
+                        # Might be closing define, reset
+                        in_define = 0
+                        current_define = ""
+                        define_line = 0
+                    }
+                }
+            } else if ($0 ~ /^[[:space:]]*\{\{-?[[:space:]]*else[[:space:]]+if[[:space:]]+/) {
+                marker_count++
+                marker_id = fname ":" current_define ":L" define_line "-L" NR
+                print "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
+                print $0
+            } else if ($0 ~ /\{\{-?[[:space:]]*(end|else)/) {
+                # Inline end/else
+                line = $0
+                original_line = $0
+                result = ""
+                pos_offset = 0
+                while (match(line, /\{\{-?[[:space:]]*(end|else)[[:space:]]*([^}]*-?\}\})?/)) {
+                    abs_pos = pos_offset + RSTART
+                    # Check if inside tpl/cat/printf string argument
+                    if (is_in_tpl_string(original_line, abs_pos)) {
+                        # Inside tpl/cat string - do not inject, just copy as-is
+                        result = result substr(line, 1, RSTART + RLENGTH - 1)
+                    } else {
+                        # Normal template code - inject marker
+                        marker_count++
+                        inline_occ++
+                        if (inline_occ == 1) {
+                            marker_id = fname ":" current_define ":L" define_line "-L" NR
+                        } else {
+                            marker_id = fname ":" current_define ":L" define_line "-L" NR "." inline_occ
+                        }
+                        marker = "{{- include \"coverage.trackHelper\" (list $ \"" marker_id "\") -}}"
+                        result = result substr(line, 1, RSTART-1) marker substr(line, RSTART, RLENGTH)
+                    }
+                    pos_offset = pos_offset + RSTART + RLENGTH - 1
+                    line = substr(line, RSTART + RLENGTH)
+                }
+                result = result line
+                print result
+            } else {
+                print $0
+            }
+        } else {
+            print $0
+        }
+    }
+    END {
+        # Write marker count to separate file
+        print marker_count > countfile
+    }
+    ' "$template_file" > "$temp_file"
+    
+    # Read marker count from file
+    local marker_count
+    marker_count=$(cat "$count_file")
+    
+    mv "$temp_file" "$template_file"
+    rm -f "$count_file"
+    
+    echo "$marker_count"
+}
+
+# -----------------------------------------------------------------------------
 # Check if a template path matches any of the select filters
 # -----------------------------------------------------------------------------
 matches_filter() {
@@ -405,10 +733,11 @@ matches_filter() {
 
 # Instrument all templates in chart
 # -----------------------------------------------------------------------------
-# Usage: instrument_chart <instrumented_dir> [filter1] [filter2] ...
+# Usage: instrument_chart <instrumented_dir> <cobertura_mode> [filter1] [filter2] ...
 instrument_chart() {
     local instrumented_dir="$1"
-    shift
+    local cobertura_mode="$2"
+    shift 2
     local select_filters=("$@")
     local total_file_markers=0
     local total_helper_markers=0
@@ -421,6 +750,15 @@ instrument_chart() {
     # Create coverage helper template
     create_helper_template "${instrumented_dir}/templates/${HELPER_FILENAME}"
     log_info "Created helper: ${HELPER_FILENAME}"
+    
+    # Select instrumentation functions based on mode
+    local yaml_instrument_func="instrument_yaml_template"
+    local tpl_instrument_func="instrument_tpl_template"
+    if [[ "$cobertura_mode" == "true" ]]; then
+        yaml_instrument_func="instrument_yaml_template_cobertura"
+        tpl_instrument_func="instrument_tpl_template_cobertura"
+        log_info "Using Cobertura mode (line ranges L<start>-L<end>)"
+    fi
     
     # Find and instrument all .yaml files
     while IFS= read -r -d '' template; do
@@ -439,7 +777,7 @@ instrument_chart() {
         fi
         
         local markers
-        markers=$(instrument_yaml_template "$template" "$relative_path")
+        markers=$($yaml_instrument_func "$template" "$relative_path")
         total_file_markers=$((total_file_markers + markers))
         
         log_info "Instrumented file: ${relative_path} (${markers} branches)"
@@ -455,7 +793,7 @@ instrument_chart() {
         [[ "$filename" == "$HELPER_FILENAME" ]] && continue
         
         local markers
-        markers=$(instrument_tpl_template "$template" "$relative_path")
+        markers=$($tpl_instrument_func "$template" "$relative_path")
         total_helper_markers=$((total_helper_markers + markers))
         
         if [[ "$markers" -gt 0 ]]; then
@@ -765,11 +1103,160 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# Generate Cobertura XML coverage report
+# Uses awk for grouping to avoid bash associative arrays compatibility issues
+# -----------------------------------------------------------------------------
+generate_cobertura_report() {
+    local all_files_accumulator="$1"
+    local all_helpers_accumulator="$2"
+    local all_file_branches_file="$3"
+    local all_helper_branches_file="$4"
+    local total_branches="$5"
+    local chart_path="$6"
+    local output_file="$7"
+    
+    # Get unique covered branches
+    local covered_files_list covered_helpers_list
+    covered_files_list=$(mktemp)
+    covered_helpers_list=$(mktemp)
+    sort -u "$all_files_accumulator" 2>/dev/null | grep -v '^$' > "$covered_files_list" || true
+    sort -u "$all_helpers_accumulator" 2>/dev/null | grep -v '^$' > "$covered_helpers_list" || true
+    
+    local unique_files unique_helpers total_covered
+    unique_files=$(wc -l < "$covered_files_list" | tr -d ' ')
+    unique_helpers=$(wc -l < "$covered_helpers_list" | tr -d ' ')
+    total_covered=$((unique_files + unique_helpers))
+    
+    # Calculate rates
+    local line_rate branch_rate
+    if [[ "$total_branches" -gt 0 ]]; then
+        line_rate=$(awk "BEGIN {printf \"%.4f\", $total_covered / $total_branches}")
+        branch_rate="$line_rate"
+    else
+        line_rate="1.0"
+        branch_rate="1.0"
+    fi
+    
+    local timestamp
+    timestamp=$(date +%s)
+    
+    # Create intermediate file with all branches and their coverage status
+    # Format: filename|start_line|hits|branch_id
+    local branches_data
+    branches_data=$(mktemp)
+    
+    # Process all file branches
+    while IFS= read -r branch; do
+        [[ -z "$branch" ]] && continue
+        # Parse branch format: filename:L<start>-L<end> or filename:L<start>-L<end>.<occurrence>
+        local filename start_line hits
+        filename=$(echo "$branch" | sed 's/:L[0-9].*$//')
+        start_line=$(echo "$branch" | sed 's/.*:L\([0-9]*\).*/\1/')
+        
+        hits=0
+        if grep -qxF "$branch" "$covered_files_list" 2>/dev/null; then
+            hits=1
+        fi
+        
+        echo "${filename}|${start_line}|${hits}|${branch}" >> "$branches_data"
+    done < <(cat "$all_file_branches_file" 2>/dev/null)
+    
+    # Process helper branches
+    while IFS= read -r branch; do
+        [[ -z "$branch" ]] && continue
+        # Parse branch format: filename:helper_name:L<start>-L<end>
+        local filename start_line hits
+        filename=$(echo "$branch" | cut -d: -f1)
+        start_line=$(echo "$branch" | sed 's/.*:L\([0-9]*\).*/\1/')
+        
+        hits=0
+        if grep -qxF "$branch" "$covered_helpers_list" 2>/dev/null; then
+            hits=1
+        fi
+        
+        echo "${filename}|${start_line}|${hits}|${branch}" >> "$branches_data"
+    done < <(cat "$all_helper_branches_file" 2>/dev/null)
+    
+    # Generate XML using awk to group by filename
+    {
+        echo '<?xml version="1.0" ?>'
+        echo '<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-04.dtd">'
+        echo "<coverage line-rate=\"${line_rate}\" branch-rate=\"${branch_rate}\" lines-covered=\"${total_covered}\" lines-valid=\"${total_branches}\" branches-covered=\"${total_covered}\" branches-valid=\"${total_branches}\" complexity=\"0\" version=\"1.0\" timestamp=\"${timestamp}\">"
+        echo "  <sources>"
+        echo "    <source>templates</source>"
+        echo "  </sources>"
+        echo "  <packages>"
+        echo "    <package name=\".\" line-rate=\"${line_rate}\" branch-rate=\"${branch_rate}\" complexity=\"0\">"
+        echo "      <classes>"
+        
+        # Use awk to group by filename and generate class elements
+        sort -t'|' -k1,1 "$branches_data" 2>/dev/null | awk -F'|' '
+        BEGIN {
+            current_file = ""
+            file_total = 0
+            file_covered = 0
+            lines_xml = ""
+        }
+        
+        function output_class() {
+            if (current_file != "") {
+                if (file_total > 0) {
+                    file_rate = sprintf("%.4f", file_covered / file_total)
+                } else {
+                    file_rate = "1.0"
+                }
+                print "        <class name=\"" current_file "\" filename=\"templates/" current_file "\" line-rate=\"" file_rate "\" branch-rate=\"" file_rate "\" complexity=\"0\">"
+                print "          <methods/>"
+                print "          <lines>"
+                print lines_xml
+                print "          </lines>"
+                print "        </class>"
+            }
+        }
+        
+        {
+            filename = $1
+            start_line = $2
+            hits = $3
+            
+            if (filename != current_file) {
+                output_class()
+                current_file = filename
+                file_total = 0
+                file_covered = 0
+                lines_xml = ""
+            }
+            
+            lines_xml = lines_xml "            <line number=\"" start_line "\" hits=\"" hits "\" branch=\"true\"/>\n"
+            file_total++
+            if (hits == 1) {
+                file_covered++
+            }
+        }
+        
+        END {
+            output_class()
+        }
+        '
+        
+        echo "      </classes>"
+        echo "    </package>"
+        echo "  </packages>"
+        echo "</coverage>"
+    } > "$output_file"
+    
+    rm -f "$covered_files_list" "$covered_helpers_list" "$branches_data"
+    
+    log_success "Cobertura report written to: $output_file"
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 main() {
     local instrument_only=false
     local json_output=false
+    local cobertura_file=""
     local chart_path=""
     local values_files=()
     local select_filters=()
@@ -801,6 +1288,14 @@ main() {
             --json)
                 json_output=true
                 shift
+                ;;
+            --cobertura)
+                if [[ -z "${2:-}" ]]; then
+                    log_error "Option $1 requires a file path argument"
+                    usage
+                fi
+                cobertura_file="$2"
+                shift 2
                 ;;
             -h|--help)
                 usage
@@ -860,10 +1355,14 @@ main() {
     fi
     cp -r "$chart_path"/* "$instrumented_dir/"
     
+    # Determine if cobertura mode is enabled
+    local cobertura_mode="false"
+    [[ -n "$cobertura_file" ]] && cobertura_mode="true"
+    
     # Instrument
     log_info "Instrumenting templates..."
     local total_branches
-    total_branches=$(instrument_chart "$instrumented_dir" ${select_filters[@]+"${select_filters[@]}"})
+    total_branches=$(instrument_chart "$instrumented_dir" "$cobertura_mode" ${select_filters[@]+"${select_filters[@]}"})
     
     if [[ "$total_branches" -eq 0 ]]; then
         log_warn "No conditional branches found"
@@ -893,10 +1392,14 @@ main() {
     all_helper_branches=$(mktemp)
     extract_all_branches "$instrumented_dir" "$all_file_branches" "$all_helper_branches"
     
+    # Determine if we should suppress per-file verbose output
+    local quiet_mode=false
+    [[ "$json_output" == true || -n "$cobertura_file" ]] && quiet_mode=true
+    
     # Run coverage for each values file or default
     if [[ ${#values_files[@]} -eq 0 ]]; then
         log_info "Running with default values..."
-        if [[ "$json_output" == true ]]; then
+        if [[ "$quiet_mode" == true ]]; then
             run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "" "$helm_extra_args" > /dev/null
         else
             run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "" "$helm_extra_args"
@@ -904,7 +1407,7 @@ main() {
     else
         for vf in "${values_files[@]}"; do
             log_info "Running with: $(basename "$vf")"
-            if [[ "$json_output" == true ]]; then
+            if [[ "$quiet_mode" == true ]]; then
                 run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "$vf" "$helm_extra_args" > /dev/null
             else
                 run_coverage "$instrumented_dir" "$total_branches" "$all_files_accumulator" "$all_helpers_accumulator" "$vf" "$helm_extra_args"
@@ -912,14 +1415,21 @@ main() {
         done
     fi
     
-    # Show summary with uncovered branches (not in JSON mode)
-    if [[ "$json_output" == false ]]; then
+    # Show summary with uncovered branches (not in JSON/Cobertura mode)
+    if [[ "$quiet_mode" == false ]]; then
         print_cumulative_summary "$all_files_accumulator" "$all_helpers_accumulator" "$total_branches" "$all_file_branches" "$all_helper_branches"
     fi
     
     # Generate JSON output if requested
     if [[ "$json_output" == true ]]; then
         generate_json_report "$all_files_accumulator" "$all_helpers_accumulator" "$total_branches" "$chart_path"
+    fi
+    
+    # Generate Cobertura XML output if requested
+    if [[ -n "$cobertura_file" ]]; then
+        generate_cobertura_report "$all_files_accumulator" "$all_helpers_accumulator" \
+            "$all_file_branches" "$all_helper_branches" \
+            "$total_branches" "$chart_path" "$cobertura_file"
     fi
     
     # Cleanup
