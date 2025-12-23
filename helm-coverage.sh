@@ -324,15 +324,18 @@ instrument_yaml_template_cobertura() {
                         start_line = ln
                     }
                     
+                    # Calculate end line: line before the else if (content lines only)
+                    end_line = (ln > start_line) ? ln - 1 : start_line
+                    
                     # Check if inside tpl string
                     abs_pos = pos
                     if (!is_in_tpl_string(line, abs_pos)) {
                         marker_count++
                         inline_occ++
                         if (inline_occ == 1) {
-                            marker_id = fname ":L" start_line "-L" ln
+                            marker_id = fname ":L" start_line "-L" end_line
                         } else {
-                            marker_id = fname ":L" start_line "-L" ln "." inline_occ
+                            marker_id = fname ":L" start_line "-L" end_line "." inline_occ
                         }
                         marker = "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
                         result = result marker
@@ -355,14 +358,17 @@ instrument_yaml_template_cobertura() {
                         start_line = ln
                     }
                     
+                    # Calculate end line: line before the else (content lines only)
+                    end_line = (ln > start_line) ? ln - 1 : start_line
+                    
                     abs_pos = pos
                     if (!is_in_tpl_string(line, abs_pos)) {
                         marker_count++
                         inline_occ++
                         if (inline_occ == 1) {
-                            marker_id = fname ":L" start_line "-L" ln
+                            marker_id = fname ":L" start_line "-L" end_line
                         } else {
-                            marker_id = fname ":L" start_line "-L" ln "." inline_occ
+                            marker_id = fname ":L" start_line "-L" end_line "." inline_occ
                         }
                         marker = "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
                         result = result marker
@@ -385,14 +391,17 @@ instrument_yaml_template_cobertura() {
                         start_line = ln
                     }
                     
+                    # Calculate end line: line before the end (content lines only)
+                    end_line = (ln > start_line) ? ln - 1 : start_line
+                    
                     abs_pos = pos
                     if (!is_in_tpl_string(line, abs_pos)) {
                         marker_count++
                         inline_occ++
                         if (inline_occ == 1) {
-                            marker_id = fname ":L" start_line "-L" ln
+                            marker_id = fname ":L" start_line "-L" end_line
                         } else {
-                            marker_id = fname ":L" start_line "-L" ln "." inline_occ
+                            marker_id = fname ":L" start_line "-L" end_line "." inline_occ
                         }
                         marker = "{{- include \"coverage.trackFile\" (list $ \"" marker_id "\") -}}"
                         result = result marker
@@ -1143,7 +1152,7 @@ generate_cobertura_report() {
     timestamp=$(date +%s)
     
     # Create intermediate file with all branches and their coverage status
-    # Format: filename|start_line|hits|branch_id
+    # Format: filename|start_line|end_line|hits|branch_id
     local branches_data
     branches_data=$(mktemp)
     
@@ -1151,32 +1160,38 @@ generate_cobertura_report() {
     while IFS= read -r branch || [[ -n "$branch" ]]; do
         [[ -z "$branch" ]] && continue
         # Parse branch format: filename:L<start>-L<end> or filename:L<start>-L<end>.<occurrence>
-        local filename start_line hits
+        local filename start_line end_line hits
         filename=$(echo "$branch" | sed 's/:L[0-9].*$//')
-        start_line=$(echo "$branch" | sed 's/.*:L\([0-9]*\).*/\1/')
+        # Extract start line: L<start>-L<end> -> start
+        start_line=$(echo "$branch" | sed 's/.*:L\([0-9]*\)-L.*/\1/')
+        # Extract end line: L<start>-L<end> -> end (remove any trailing .N occurrence)
+        end_line=$(echo "$branch" | sed 's/.*-L\([0-9]*\).*/\1/')
         
         hits=0
         if grep -qxF "$branch" "$covered_files_list" 2>/dev/null; then
             hits=1
         fi
         
-        echo "${filename}|${start_line}|${hits}|${branch}" >> "$branches_data"
+        echo "${filename}|${start_line}|${end_line}|${hits}|${branch}" >> "$branches_data"
     done < <(cat "$all_file_branches_file" 2>/dev/null)
     
     # Process helper branches
     while IFS= read -r branch || [[ -n "$branch" ]]; do
         [[ -z "$branch" ]] && continue
         # Parse branch format: filename:helper_name:L<start>-L<end>
-        local filename start_line hits
+        local filename start_line end_line hits
         filename=$(echo "$branch" | cut -d: -f1)
-        start_line=$(echo "$branch" | sed 's/.*:L\([0-9]*\).*/\1/')
+        # Extract start line
+        start_line=$(echo "$branch" | sed 's/.*:L\([0-9]*\)-L.*/\1/')
+        # Extract end line (remove any trailing .N occurrence)
+        end_line=$(echo "$branch" | sed 's/.*-L\([0-9]*\).*/\1/')
         
         hits=0
         if grep -qxF "$branch" "$covered_helpers_list" 2>/dev/null; then
             hits=1
         fi
         
-        echo "${filename}|${start_line}|${hits}|${branch}" >> "$branches_data"
+        echo "${filename}|${start_line}|${end_line}|${hits}|${branch}" >> "$branches_data"
     done < <(cat "$all_helper_branches_file" 2>/dev/null)
     
     # Generate XML using awk to group by filename
@@ -1191,23 +1206,100 @@ generate_cobertura_report() {
         echo "    <package name=\".\" line-rate=\"${line_rate}\" branch-rate=\"${branch_rate}\" complexity=\"0\">"
         echo "      <classes>"
         
-        # Use awk to group by filename and generate class elements
-        sort -t'|' -k1,1 "$branches_data" 2>/dev/null | awk -F'|' '
+        # Process branches data for both line coverage and branch coverage
+        # Input format: filename|start_line|end_line|hits|branch_id
+        
+        local expanded_data branch_stats
+        expanded_data=$(mktemp)
+        branch_stats=$(mktemp)
+        
+        # Step 1: Calculate branch coverage stats per line (condition-coverage)
+        # Group branches by filename|start_line and count total/covered
+        sort -t'|' -k1,1 -k2,2n "$branches_data" 2>/dev/null | awk -F'|' '
+        {
+            filename = $1
+            start_line = int($2)
+            hits = int($4)
+            key = filename "|" start_line
+            
+            total[key]++
+            if (hits == 1) covered[key]++
+            file[key] = filename
+            line[key] = start_line
+        }
+        END {
+            for (key in total) {
+                cov = (key in covered) ? covered[key] : 0
+                print file[key] "|" line[key] "|" total[key] "|" cov
+            }
+        }
+        ' | sort -t'|' -k1,1 -k2,2n > "$branch_stats"
+        
+        # Step 2: Expand line ranges for line coverage (use max - line is covered if ANY branch touching it is covered)
+        sort -t'|' -k1,1 -k2,2n "$branches_data" 2>/dev/null | awk -F'|' '
+        {
+            filename = $1
+            start_line = int($2)
+            end_line = int($3)
+            hits = int($4)
+            
+            # Output one line per line number in range
+            for (line_num = start_line; line_num <= end_line; line_num++) {
+                print filename "|" line_num "|" hits
+            }
+        }
+        ' | sort -t'|' -k1,1 -k2,2n | awk -F'|' '
+        # Deduplicate: keep MAXIMUM hits for each file+line combination
+        # A line is covered if ANY branch that includes it was executed
+        {
+            key = $1 "|" $2
+            hits = int($3)
+            if (!(key in seen) || hits > seen[key]) {
+                seen[key] = hits
+                file[key] = $1
+                line[key] = $2
+            }
+        }
+        END {
+            for (key in seen) {
+                print file[key] "|" line[key] "|" seen[key]
+            }
+        }
+        ' | sort -t'|' -k1,1 -k2,2n > "$expanded_data"
+        
+        # Step 3: Generate XML combining line coverage and branch coverage
+        awk -F'|' -v branch_file="$branch_stats" '
         BEGIN {
             current_file = ""
-            file_total = 0
-            file_covered = 0
+            file_lines_total = 0
+            file_lines_covered = 0
+            file_branches_total = 0
+            file_branches_covered = 0
             lines_xml = ""
+            
+            # Load branch stats into arrays
+            while ((getline branch_line < branch_file) > 0) {
+                split(branch_line, parts, "|")
+                bkey = parts[1] "|" parts[2]
+                branch_total[bkey] = parts[3]
+                branch_covered[bkey] = parts[4]
+            }
+            close(branch_file)
         }
         
         function output_class() {
             if (current_file != "") {
-                if (file_total > 0) {
-                    file_rate = sprintf("%.4f", file_covered / file_total)
+                if (file_lines_total > 0) {
+                    line_rate = sprintf("%.4f", file_lines_covered / file_lines_total)
                 } else {
-                    file_rate = "1.0"
+                    line_rate = "1.0"
                 }
-                print "        <class name=\"" current_file "\" filename=\"templates/" current_file "\" line-rate=\"" file_rate "\" branch-rate=\"" file_rate "\" complexity=\"0\">"
+                if (file_branches_total > 0) {
+                    branch_rate = sprintf("%.4f", file_branches_covered / file_branches_total)
+                } else {
+                    branch_rate = "1.0"
+                }
+                print "        <class name=\"" current_file "\" filename=\"templates/" current_file "\" line-rate=\"" line_rate "\" branch-rate=\"" branch_rate "\" complexity=\"0\">"
                 print "          <methods/>"
                 print "          <lines>"
                 print lines_xml
@@ -1218,28 +1310,45 @@ generate_cobertura_report() {
         
         {
             filename = $1
-            start_line = $2
+            line_num = $2
             hits = $3
             
             if (filename != current_file) {
                 output_class()
                 current_file = filename
-                file_total = 0
-                file_covered = 0
+                file_lines_total = 0
+                file_lines_covered = 0
+                file_branches_total = 0
+                file_branches_covered = 0
                 lines_xml = ""
             }
             
-            lines_xml = lines_xml "            <line number=\"" start_line "\" hits=\"" hits "\" branch=\"true\"/>\n"
-            file_total++
-            if (hits == 1) {
-                file_covered++
+            # Check if this line has branch conditions
+            bkey = filename "|" line_num
+            if (bkey in branch_total) {
+                bt = branch_total[bkey]
+                bc = branch_covered[bkey]
+                pct = (bt > 0) ? int(bc * 100 / bt) : 100
+                cond_cov = pct "% (" bc "/" bt ")"
+                lines_xml = lines_xml "            <line number=\"" line_num "\" hits=\"" hits "\" branch=\"true\" condition-coverage=\"" cond_cov "\"/>\n"
+                file_branches_total += bt
+                file_branches_covered += bc
+            } else {
+                lines_xml = lines_xml "            <line number=\"" line_num "\" hits=\"" hits "\" branch=\"false\"/>\n"
+            }
+            
+            file_lines_total++
+            if (hits >= 1) {
+                file_lines_covered++
             }
         }
         
         END {
             output_class()
         }
-        '
+        ' "$expanded_data"
+        
+        rm -f "$expanded_data" "$branch_stats"
         
         echo "      </classes>"
         echo "    </package>"
